@@ -9,16 +9,23 @@ import os
 from flask import Flask
 from threading import Thread
 
-# --- 1. TẠO WEB SERVER ĐỂ TREO 24/24 ---
+# --- 1. CẤU HÌNH WEB SERVER ĐỂ RENDER KHÔNG BÁO LỖI PORT ---
 app = Flask('')
+
 @app.route('/')
-def home(): return "Bot is alive!"
-def run(): app.run(host='0.0.0.0', port=8080)
+def home():
+    return "Bot is alive!"
+
+def run():
+    # Lấy cổng từ Render, nếu không có thì mặc định là 8080
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
 def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- 2. CẤU HÌNH BIẾN MÔI TRƯỜNG (LẤY TỪ RENDER) ---
+# --- 2. LẤY MÃ TỪ ENVIRONMENT VARIABLES ---
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 GEMINI_KEY = os.getenv('GEMINI_KEY')
 
@@ -34,7 +41,7 @@ FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconne
 class MyBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
-        intents.message_content = True  # Quan trọng để đọc tin nhắn chat
+        intents.message_content = True 
         intents.members = True
         super().__init__(command_prefix="!", intents=intents)
 
@@ -48,14 +55,14 @@ bot = MyBot()
 async def on_ready():
     print(f"🚀 Bot đã sẵn sàng: {bot.user.name}")
 
-# --- 3. TỰ ĐỘNG CHAT AI KHI NHẮN TIN (KHÔNG CẦN /CHAT) ---
+# --- 3. TỰ ĐỘNG CHAT AI (NHẮN TIN LÀ REP) ---
 @bot.event
 async def on_message(message):
     if message.author == bot.user or message.mention_everyone:
         return
 
-    # Chỉ trả lời khi được mention hoặc nhắn trong kênh (có thể bỏ điều kiện này nếu muốn bot rep mọi lúc)
-    if not message.content.startswith('!'): # Tránh trùng với lệnh prefix nếu có
+    # Nếu không phải lệnh bắt đầu bằng '!', bot sẽ chat AI
+    if not message.content.startswith('!'):
         user_id = message.author.id
         if user_id not in chat_sessions:
             chat_sessions[user_id] = model.start_chat(history=[])
@@ -63,9 +70,10 @@ async def on_message(message):
         async with message.channel.typing():
             try:
                 response = chat_sessions[user_id].send_message(message.content)
+                # Cắt bớt nếu tin nhắn quá dài (>2000 ký tự)
                 await message.reply(response.text[:1900])
             except:
-                pass # Bỏ qua nếu lỗi AI
+                pass 
 
     await bot.process_commands(message)
 
@@ -73,7 +81,7 @@ async def on_message(message):
 @bot.tree.command(name="play", description="Phát nhạc từ YouTube")
 async def play(interaction: discord.Interaction, search: str):
     if not interaction.user.voice:
-        return await interaction.response.send_message("❌ Bạn phải vào Voice Channel trước!")
+        return await interaction.response.send_message("❌ Vào Voice Channel trước đã!")
     
     await interaction.response.defer()
     vc = interaction.guild.voice_client or await interaction.user.voice.channel.connect()
@@ -85,22 +93,21 @@ async def play(interaction: discord.Interaction, search: str):
         
         if vc.is_playing(): vc.stop()
         
-        # Sử dụng FFmpeg để phát nhạc
         vc.play(discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS))
         await interaction.followup.send(f"🎵 Đang phát: **{info['title']}**")
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ Không lấy được nhạc, thử bài khác nha!")
+    except:
+        await interaction.followup.send(f"⚠️ Lỗi nhạc rồi, thử bài khác nha!")
 
 # --- 5. LỆNH DỪNG NHẠC (/stop) ---
 @bot.tree.command(name="stop", description="Dừng nhạc và thoát Voice")
 async def stop(interaction: discord.Interaction):
     if interaction.guild.voice_client:
         await interaction.guild.voice_client.disconnect()
-        await interaction.response.send_message("👋 Đã ngắt kết nối!")
+        await interaction.response.send_message("👋 Bye bye!")
     else:
-        await interaction.response.send_message("Bot có ở trong kênh nào đâu?")
+        await interaction.response.send_message("Tui có ở trong kênh nào đâu?")
 
 # --- CHẠY BOT ---
 if __name__ == "__main__":
-    keep_alive()
+    keep_alive() # Quan trọng để Render không tắt bot
     bot.run(DISCORD_TOKEN)
