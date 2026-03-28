@@ -22,8 +22,8 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-GEMINI_KEY = os.getenv('GEMINI_KEY')
+DISCORD_TOKEN = os.getenv('MTQ4NzM0Mjc1MDEwOTAwODAyMw.GnxgL-.W7ttURIpkFwmE7J_kXGBox1JZfcTNQrlVT3huw')
+GEMINI_KEY = os.getenv('AIzaSyDxsImB4VKl45TfD4LhfPQruvw6Lov2sMc')
 
 genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
