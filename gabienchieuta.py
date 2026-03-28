@@ -18,7 +18,7 @@ def home():
 
 def run():
     # Lấy cổng từ Render, nếu không có thì mặc định là 8080
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
