@@ -1,5 +1,3 @@
-discord.py[voice]
+discord.py
 google-generativeai
-yt-dlp
-flask
-PyNaCl
+python-dotenv
