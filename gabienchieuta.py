@@ -1,139 +1,131 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
-import google.generativeai as genai
+from discord import app_commands
 import yt_dlp
 import asyncio
 import os
 from dotenv import load_dotenv
+import google.generativeai as genai
 
-# ================== LOAD ENV ==================
 load_dotenv()
-DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-GEMINI_KEY = os.getenv('GEMINI_KEY')
 
-if not DISCORD_TOKEN or not GEMINI_KEY:
-    print("❌ Thiếu DISCORD_TOKEN hoặc GEMINI_KEY trong .env")
-    exit()
+TOKEN = os.getenv("TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# ================== GEMINI SETUP ==================
-genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')   # hoặc 'gemini-2.0-flash-exp'
+# --- Gemini setup ---
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-pro")
 
 chat_sessions = {}
 
-# ================== YT-DLP CONFIG ==================
-YDL_OPTIONS = {
-    'format': 'bestaudio/best',
-    'noplaylist': True,
-    'quiet': True,
-    'no_warnings': True,
-}
+# --- Discord setup ---
+intents = discord.Intents.default()
+intents.message_content = True
 
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# --- FFmpeg ---
 FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn'
 }
 
-# ================== BOT SETUP ==================
-class MyBot(commands.Bot):
-    def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        intents.members = True
-        super().__init__(command_prefix="!", intents=intents)
+YDL_OPTIONS = {
+    'format': 'bestaudio/best',
+    'quiet': True
+}
 
-    async def setup_hook(self):
-        await self.tree.sync()
-        print("✅ Slash commands đã sync")
+# --- Music Queue ---
+queues = {}
 
-bot = MyBot()
+# ===================== EVENTS =====================
 
-# ================== EVENTS ==================
 @bot.event
 async def on_ready():
-    print(f"🚀 Bot {bot.user} đã online và chạy 24/7!")
+    print(f"Logged in as {bot.user}")
+    await bot.tree.sync()
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # Chat bình thường (không cần lệnh !)
-    if not message.content.startswith('!'):
-        user_id = message.author.id
-        if user_id not in chat_sessions:
-            chat_sessions[user_id] = model.start_chat(history=[])
+    # Chỉ trả lời khi bị tag (tránh spam API)
+    if bot.user in message.mentions:
+        chat_id = message.channel.id
 
-        try:
-            async with message.channel.typing():
-                loop = asyncio.get_running_loop()
-                response = await loop.run_in_executor(
-                    None, 
-                    lambda: chat_sessions[user_id].send_message(message.content)
+        if chat_id not in chat_sessions:
+            chat_sessions[chat_id] = model.start_chat(history=[])
+
+        async with message.channel.typing():
+            try:
+                response = await asyncio.to_thread(
+                    chat_sessions[chat_id].send_message,
+                    message.content
                 )
-                msg = response.text
-
-                # Cắt tin nhắn nếu quá dài
-                for i in range(0, len(msg), 1900):
-                    await message.reply(msg[i:i+1900])
-        except Exception as e:
-            print(f"Lỗi chat Gemini: {e}")
-            # Không reply lỗi để tránh spam
+                await message.reply(response.text[:2000])
+            except Exception as e:
+                print(e)
+                await message.reply("Gemini lỗi rồi 💀")
 
     await bot.process_commands(message)
 
-# ================== SLASH COMMANDS ==================
-@bot.tree.command(name="chat", description="Chat với Gemini AI")
-async def chat(interaction: discord.Interaction, message: str):
-    await interaction.response.defer()
+# ===================== MUSIC =====================
 
-    user_id = interaction.user.id
-    if user_id not in chat_sessions:
-        chat_sessions[user_id] = model.start_chat(history=[])
+async def play_next(interaction):
+    guild_id = interaction.guild.id
+    vc = interaction.guild.voice_client
 
-    try:
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            None, 
-            lambda: chat_sessions[user_id].send_message(message)
-        )
-        await interaction.followup.send(response.text[:1900])
-    except Exception as e:
-        await interaction.followup.send("⚠️ AI đang bận, thử lại sau nhé!")
-
-@bot.tree.command(name="play", description="Phát nhạc từ YouTube")
-async def play(interaction: discord.Interaction, search: str):
-    if not interaction.user.voice:
-        return await interaction.response.send_message("❌ Bạn phải vào Voice Channel trước!")
-
-    await interaction.response.defer()
-
-    try:
-        vc = interaction.guild.voice_client
-        if not vc:
-            vc = await interaction.user.voice.channel.connect()
+    if queues[guild_id]:
+        url = queues[guild_id].pop(0)
 
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-            info = ydl.extract_info(f"ytsearch:{search}", download=False)['entries'][0]
-            url = info['url']
+            info = ydl.extract_info(f"ytsearch:{url}", download=False)['entries'][0]
+            link = info['url']
+            title = info['title']
 
-        if vc.is_playing():
-            vc.stop()
+        vc.play(
+            discord.FFmpegPCMAudio(link, executable="ffmpeg", **FFMPEG_OPTIONS),
+            after=lambda e: asyncio.run_coroutine_threadsafe(
+                play_next(interaction), bot.loop)
+        )
 
-        vc.play(discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS))
-        await interaction.followup.send(f"🎵 Đang phát: **{info['title']}**")
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ Lỗi: {str(e)[:500]}")
+# --- PLAY ---
+@bot.tree.command(name="play", description="Phát nhạc từ YouTube")
+@app_commands.describe(url="Link hoặc tên bài hát")
+async def play(interaction: discord.Interaction, url: str):
+    await interaction.response.defer()
 
-@bot.tree.command(name="stop", description="Dừng nhạc và rời voice")
-async def stop(interaction: discord.Interaction):
-    if interaction.guild.voice_client:
-        await interaction.guild.voice_client.disconnect()
-        await interaction.response.send_message("👋 Đã rời voice channel!")
+    if not interaction.user.voice:
+        return await interaction.followup.send("Vào voice trước đi 😭")
+
+    vc = interaction.guild.voice_client
+    if not vc:
+        vc = await interaction.user.voice.channel.connect()
+
+    guild_id = interaction.guild.id
+
+    if guild_id not in queues:
+        queues[guild_id] = []
+
+    queues[guild_id].append(url)
+
+    if not vc.is_playing():
+        await play_next(interaction)
+        await interaction.followup.send(f"🎵 Đang phát: {url}")
     else:
-        await interaction.response.send_message("Bot hiện không ở trong voice channel nào.")
+        await interaction.followup.send(f"📥 Đã thêm vào queue: {url}")
 
-# ================== CHẠY BOT ==================
-if __name__ == "__main__":
-    bot.run(DISCORD_TOKEN)
+# --- STOP ---
+@bot.tree.command(name="stop", description="Dừng nhạc")
+async def stop(interaction: discord.Interaction):
+    vc = interaction.guild.voice_client
+    if vc:
+        queues[interaction.guild.id] = []
+        await vc.disconnect()
+        await interaction.response.send_message("👋 Nghỉ khỏe")
+    else:
+        await interaction.response.send_message("Bot chưa vào voice")
+
+# ===================== RUN =====================
+
+bot.run(TOKEN)
