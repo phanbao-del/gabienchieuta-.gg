@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 import asyncio
 import yt_dlp
 import random
@@ -27,44 +26,115 @@ TOKEN = "YOUR_DISCORD_TOKEN"
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ===== MUSIC =====
-FFMPEG_OPTIONS = {'options': '-vn'}
-YDL_OPTIONS = {'format': 'bestaudio/best', 'quiet': True}
 queues = {}
+afk_users = {}
+xp = {}
 
 # ================= EVENTS =================
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-    await bot.tree.sync()
+
+@bot.event
+async def on_member_join(member):
+    channel = member.guild.system_channel
+    if channel:
+        await channel.send(f"🎉 Welcome {member.mention}!")
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # 🔥 auto chào
+    user_id = message.author.id
+
+    # XP system (đơn giản)
+    xp[user_id] = xp.get(user_id, 0) + 1
+
+    # auto chào
     if message.content.lower() in ["hi", "hello"]:
         await message.reply("Chào bro 😎")
 
-    # 🔥 anti @everyone
+    # anti @everyone
     if "@everyone" in message.content:
-        await message.reply("Đừng ping everyone bừa bãi 😡")
+        await message.reply("Đừng ping everyone 😡")
+
+    # AFK check
+    if user_id in afk_users:
+        afk_users.pop(user_id)
+        await message.reply("Welcome back 😏")
+
+    for user in message.mentions:
+        if user.id in afk_users:
+            await message.reply(f"{user.name} đang AFK: {afk_users[user.id]}")
 
     await bot.process_commands(message)
+
+# ================= MOD =================
+
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def kick(ctx, member: discord.Member):
+    if member.top_role >= ctx.author.top_role:
+        return await ctx.send("Không thể kick người này 😭")
+
+    await member.kick()
+    await ctx.send(f"Đã kick {member}")
+
+@kick.error
+async def kick_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("Bạn không có quyền 😡")
+
+@bot.command()
+@commands.has_permissions(ban_members=True)
+async def ban(ctx, member: discord.Member):
+    if member.top_role >= ctx.author.top_role:
+        return await ctx.send("Không thể ban người này 😭")
+
+    await member.ban()
+    await ctx.send(f"Đã ban {member}")
+
+@ban.error
+async def ban_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("Bạn không có quyền 😡")
+
+@bot.command()
+async def clear(ctx, amount: int):
+    await ctx.channel.purge(limit=amount)
+
+# ================= AFK =================
+
+@bot.command()
+async def afk(ctx, *, reason="AFK"):
+    afk_users[ctx.author.id] = reason
+    await ctx.send("😴 Đã AFK")
+
+# ================= FUN =================
+
+@bot.command()
+async def random(ctx, a: int, b: int):
+    if a > b:
+        return await ctx.send("Sai khoảng 😭")
+    await ctx.send(f"🎲 {random.randint(a, b)}")
+
+@bot.command()
+async def coinflip(ctx):
+    await ctx.send(random.choice(["Heads", "Tails"]))
 
 # ================= GIVEAWAY =================
 
 @bot.command()
 async def giveaway(ctx, time: int, *, prize):
-    msg = await ctx.send(f"🎉 GIVEAWAY: {prize}\nReact 🎉 để tham gia!\nKết thúc sau {time}s")
+    msg = await ctx.send(f"🎉 Giveaway: {prize}\nReact 🎉 để tham gia!\n⏳ {time}s")
 
     await msg.add_reaction("🎉")
-
     await asyncio.sleep(time)
 
     msg = await ctx.channel.fetch_message(msg.id)
@@ -78,17 +148,20 @@ async def giveaway(ctx, time: int, *, prize):
 
     if users:
         winner = random.choice(users)
-        await ctx.send(f"🏆 Chúc mừng {winner.mention} thắng {prize}!")
+        await ctx.send(f"🏆 {winner.mention} thắng {prize}!")
     else:
-        await ctx.send("Không có ai tham gia 😭")
+        await ctx.send("Không ai tham gia 😭")
 
 # ================= MUSIC =================
+
+FFMPEG_OPTIONS = {'options': '-vn'}
+YDL_OPTIONS = {'format': 'bestaudio/best', 'quiet': True}
 
 async def play_next(ctx):
     guild_id = ctx.guild.id
     vc = ctx.guild.voice_client
 
-    if queues[guild_id]:
+    if guild_id in queues and queues[guild_id]:
         url = queues[guild_id].pop(0)
 
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
@@ -97,7 +170,8 @@ async def play_next(ctx):
 
         vc.play(
             discord.FFmpegPCMAudio(link, executable="ffmpeg", **FFMPEG_OPTIONS),
-            after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
+            after=lambda e: asyncio.run_coroutine_threadsafe(
+                play_next(ctx), bot.loop)
         )
 
 @bot.command()
@@ -113,9 +187,9 @@ async def play(ctx, *, url):
 
     if not vc.is_playing():
         await play_next(ctx)
-        await ctx.send(f"🎵 Đang phát: {url}")
+        await ctx.send(f"🎵 {url}")
     else:
-        await ctx.send(f"📥 Đã thêm: {url}")
+        await ctx.send("📥 Đã thêm")
 
 @bot.command()
 async def stop(ctx):
@@ -123,7 +197,6 @@ async def stop(ctx):
     if vc:
         queues[ctx.guild.id] = []
         await vc.disconnect()
-        await ctx.send("👋 Dừng nhạc")
 
 # ================= RUN =================
 
