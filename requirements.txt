@@ -1,3 +1,9 @@
 discord.py
-google-generativeai
+yt-dlp
 python-dotenv
+google-generativeai
+PyNaCldiscord.py
+yt-dlp
+python-dotenv
+google-generativeai
+PyNaCl
