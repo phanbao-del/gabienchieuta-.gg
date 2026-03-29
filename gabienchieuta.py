@@ -38,7 +38,7 @@ print("GEMINI:", "OK" if GEMINI_API_KEY else "MISSING")
 genai.configure(api_key=GEMINI_API_KEY)
 
 # ⚠️ MODEL MỚI (QUAN TRỌNG)
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel("gemini-1.0-pro")
 
 chat_sessions = {}
 
