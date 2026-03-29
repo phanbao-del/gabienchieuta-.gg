@@ -1,11 +1,9 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import yt_dlp
 import asyncio
-import os
-from dotenv import load_dotenv
-import google.generativeai as genai
+import yt_dlp
+import random
 
 # ===== KEEP ALIVE =====
 from flask import Flask
@@ -25,26 +23,11 @@ def keep_alive():
 
 # ======================
 
-load_dotenv()
+TOKEN = "YOUR_DISCORD_TOKEN"
 
-TOKEN = os.getenv("TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-# 🔥 DEBUG ENV
-print("TOKEN:", "OK" if TOKEN else "MISSING")
-print("GEMINI:", "OK" if GEMINI_API_KEY else "MISSING")
-
-# ===== GEMINI FIX =====
-genai.configure(api_key=GEMINI_API_KEY)
-
-# ⚠️ MODEL MỚI (QUAN TRỌNG)
-model = genai.GenerativeModel("gemini-1.0-pro")
-
-chat_sessions = {}
-
-# ===== DISCORD =====
 intents = discord.Intents.default()
 intents.message_content = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ===== MUSIC =====
@@ -64,95 +47,83 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # chat khi tag
-    if bot.user in message.mentions:
-        await handle_chat(message, message.content)
+    # 🔥 auto chào
+    if message.content.lower() in ["hi", "hello"]:
+        await message.reply("Chào bro 😎")
+
+    # 🔥 anti @everyone
+    if "@everyone" in message.content:
+        await message.reply("Đừng ping everyone bừa bãi 😡")
 
     await bot.process_commands(message)
 
-# ================= CHAT =================
+# ================= GIVEAWAY =================
 
-async def handle_chat(ctx, content):
-    chat_id = ctx.channel.id
-
-    if chat_id not in chat_sessions:
-        chat_sessions[chat_id] = model.start_chat(history=[])
-
-    try:
-        response = await asyncio.to_thread(
-            chat_sessions[chat_id].send_message,
-            content
-        )
-
-        await ctx.reply(response.text[:2000])
-
-    except Exception as e:
-        print("Gemini ERROR:", e)
-        await ctx.reply(f"Lỗi Gemini 💀\n```{e}```")
-
-# 👉 lệnh !chat
 @bot.command()
-async def chat(ctx, *, message):
-    await handle_chat(ctx, message)
+async def giveaway(ctx, time: int, *, prize):
+    msg = await ctx.send(f"🎉 GIVEAWAY: {prize}\nReact 🎉 để tham gia!\nKết thúc sau {time}s")
 
-# 👉 reset chat
-@bot.command()
-async def reset(ctx):
-    chat_sessions.pop(ctx.channel.id, None)
-    await ctx.reply("🔄 Reset chat!")
+    await msg.add_reaction("🎉")
+
+    await asyncio.sleep(time)
+
+    msg = await ctx.channel.fetch_message(msg.id)
+    users = []
+
+    for reaction in msg.reactions:
+        if str(reaction.emoji) == "🎉":
+            async for user in reaction.users():
+                if not user.bot:
+                    users.append(user)
+
+    if users:
+        winner = random.choice(users)
+        await ctx.send(f"🏆 Chúc mừng {winner.mention} thắng {prize}!")
+    else:
+        await ctx.send("Không có ai tham gia 😭")
 
 # ================= MUSIC =================
 
-async def play_next(interaction):
-    guild_id = interaction.guild.id
-    vc = interaction.guild.voice_client
+async def play_next(ctx):
+    guild_id = ctx.guild.id
+    vc = ctx.guild.voice_client
 
-    if guild_id in queues and queues[guild_id]:
+    if queues[guild_id]:
         url = queues[guild_id].pop(0)
 
-        try:
-            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-                info = ydl.extract_info(f"ytsearch:{url}", download=False)['entries'][0]
-                link = info['url']
-        except Exception as e:
-            print("YTDLP ERROR:", e)
-            return await play_next(interaction)
+        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+            info = ydl.extract_info(f"ytsearch:{url}", download=False)['entries'][0]
+            link = info['url']
 
         vc.play(
             discord.FFmpegPCMAudio(link, executable="ffmpeg", **FFMPEG_OPTIONS),
-            after=lambda e: asyncio.run_coroutine_threadsafe(
-                play_next(interaction), bot.loop)
+            after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
         )
 
-@bot.tree.command(name="play", description="Phát nhạc")
-async def play(interaction: discord.Interaction, url: str):
-    await interaction.response.defer()
+@bot.command()
+async def play(ctx, *, url):
+    if not ctx.author.voice:
+        return await ctx.send("Vào voice trước 😭")
 
-    if not interaction.user.voice:
-        return await interaction.followup.send("Vào voice trước 😭")
-
-    vc = interaction.guild.voice_client
+    vc = ctx.guild.voice_client
     if not vc:
-        vc = await interaction.user.voice.channel.connect()
+        vc = await ctx.author.voice.channel.connect()
 
-    guild_id = interaction.guild.id
-    queues.setdefault(guild_id, []).append(url)
+    queues.setdefault(ctx.guild.id, []).append(url)
 
     if not vc.is_playing():
-        await play_next(interaction)
-        await interaction.followup.send(f"🎵 Đang phát: {url}")
+        await play_next(ctx)
+        await ctx.send(f"🎵 Đang phát: {url}")
     else:
-        await interaction.followup.send(f"📥 Đã thêm: {url}")
+        await ctx.send(f"📥 Đã thêm: {url}")
 
-@bot.tree.command(name="stop", description="Dừng nhạc")
-async def stop(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
+@bot.command()
+async def stop(ctx):
+    vc = ctx.guild.voice_client
     if vc:
-        queues[interaction.guild.id] = []
+        queues[ctx.guild.id] = []
         await vc.disconnect()
-        await interaction.response.send_message("👋 Nghỉ khỏe")
-    else:
-        await interaction.response.send_message("Bot chưa vào voice")
+        await ctx.send("👋 Dừng nhạc")
 
 # ================= RUN =================
 
