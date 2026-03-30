@@ -1,204 +1,157 @@
 import discord
 from discord.ext import commands
 import asyncio
-import yt_dlp
 import random
+import json
+import os
+import re
+import yt_dlp
+from keep_alive import keep_alive
+from datetime import datetime
 
-# ===== KEEP ALIVE =====
-from flask import Flask
-from threading import Thread
-
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "Bot is alive!"
-
-def run_web():
-    app.run(host='0.0.0.0', port=8080)
-
-def keep_alive():
-    Thread(target=run_web).start()
-
-# ======================
-
-TOKEN = "YOUR_DISCORD_TOKEN"
-
-intents = discord.Intents.default()
+intents = discord.Intents.all()
 intents.message_content = True
-intents.members = True
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+# ==================== CONFIG ====================
+STAFF_ROLES = ["Owner", "Co-owner", "Co own", "Mod", "Admin", "Lễ tân", "Ticket Admin", "Ticket Support"]
+GIVEAWAY_ROLES = ["Owner", "Co-owner", "Mod", "Admin"]  
 
-queues = {}
-afk_users = {}
-xp = {}
+TASK_FILE = "tasks.json"
 
-# ================= EVENTS =================
+if not os.path.exists(TASK_FILE):
+    with open(TASK_FILE, "w", encoding="utf-8") as f:
+        json.dump([], f, ensure_ascii=False, indent=4)
+
+def load_tasks():
+    with open(TASK_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_tasks(tasks):
+    with open(TASK_FILE, "w", encoding="utf-8") as f:
+        json.dump(tasks, f, ensure_ascii=False, indent=4)
+
+def parse_time(time_str):
+    time_str = time_str.lower().replace(" ", "")
+    total_seconds = 0
+    matches = re.findall(r'(\d+)([hms])', time_str)
+    for value, unit in matches:
+        value = int(value)
+        if unit == 'h': total_seconds += value * 3600
+        elif unit == 'm': total_seconds += value * 60
+        elif unit == 's': total_seconds += value
+    return total_seconds
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
-
-@bot.event
-async def on_member_join(member):
-    channel = member.guild.system_channel
-    if channel:
-        await channel.send(f"🎉 Welcome {member.mention}!")
+    print(f'{bot.user} đã online!')
+    await bot.change_presence(activity=discord.Game(name="Đang làm việc chăm chỉ ^^"))
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
-
-    user_id = message.author.id
-
-    # XP system (đơn giản)
-    xp[user_id] = xp.get(user_id, 0) + 1
-
-    # auto chào
-    if message.content.lower() in ["hi", "hello"]:
-        await message.reply("Chào bro 😎")
-
-    # anti @everyone
-    if "@everyone" in message.content:
-        await message.reply("Đừng ping everyone 😡")
-
-    # AFK check
-    if user_id in afk_users:
-        afk_users.pop(user_id)
-        await message.reply("Welcome back 😏")
-
-    for user in message.mentions:
-        if user.id in afk_users:
-            await message.reply(f"{user.name} đang AFK: {afk_users[user.id]}")
-
     await bot.process_commands(message)
 
-# ================= MOD =================
-
+# Giveaway
 @bot.command()
-@commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member):
-    if member.top_role >= ctx.author.top_role:
-        return await ctx.send("Không thể kick người này 😭")
+@commands.has_any_role(*GIVEAWAY_ROLES)
+async def ga(ctx, time_str: str, winners: int, *, prize: str):
+    seconds = parse_time(time_str)
+    if seconds <= 0:
+        await ctx.send("**Thời gian không hợp lệ! Ví dụ: 24h, 30m, 1h30m**")
+        return
 
-    await member.kick()
-    await ctx.send(f"Đã kick {member}")
-
-@kick.error
-async def kick_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("Bạn không có quyền 😡")
-
-@bot.command()
-@commands.has_permissions(ban_members=True)
-async def ban(ctx, member: discord.Member):
-    if member.top_role >= ctx.author.top_role:
-        return await ctx.send("Không thể ban người này 😭")
-
-    await member.ban()
-    await ctx.send(f"Đã ban {member}")
-
-@ban.error
-async def ban_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("Bạn không có quyền 😡")
-
-@bot.command()
-async def clear(ctx, amount: int):
-    await ctx.channel.purge(limit=amount)
-
-# ================= AFK =================
-
-@bot.command()
-async def afk(ctx, *, reason="AFK"):
-    afk_users[ctx.author.id] = reason
-    await ctx.send("😴 Đã AFK")
-
-# ================= FUN =================
-
-@bot.command()
-async def random(ctx, a: int, b: int):
-    if a > b:
-        return await ctx.send("Sai khoảng 😭")
-    await ctx.send(f"🎲 {random.randint(a, b)}")
-
-@bot.command()
-async def coinflip(ctx):
-    await ctx.send(random.choice(["Heads", "Tails"]))
-
-# ================= GIVEAWAY =================
-
-@bot.command()
-async def giveaway(ctx, time: int, *, prize):
-    msg = await ctx.send(f"🎉 Giveaway: {prize}\nReact 🎉 để tham gia!\n⏳ {time}s")
-
+    embed = discord.Embed(title="🎉 **GIVEAWAY** 🎉", description=f"**Phần thưởng:** {prize}\n**Số người thắng:** {winners}\n**Thời gian:** {time_str}", color=0x00ff00)
+    embed.set_footer(text=f"Kết thúc sau {time_str} • Hosted by {ctx.author}")
+    msg = await ctx.send(embed=embed)
     await msg.add_reaction("🎉")
-    await asyncio.sleep(time)
+
+    await asyncio.sleep(seconds)
 
     msg = await ctx.channel.fetch_message(msg.id)
-    users = []
+    reaction = discord.utils.get(msg.reactions, emoji="🎉")
+    if not reaction or reaction.count - 1 < winners:
+        await ctx.send("**Không đủ người tham gia giveaway!**")
+        return
 
-    for reaction in msg.reactions:
-        if str(reaction.emoji) == "🎉":
-            async for user in reaction.users():
-                if not user.bot:
-                    users.append(user)
+    users = [user async for user in reaction.users()]
+    users.pop(0)
+    winners_list = random.sample(users, k=min(winners, len(users)))
+    winner_mentions = ", ".join([winner.mention for winner in winners_list])
+    await ctx.send(f"**🎉 Chúc mừng {winner_mentions} đã thắng {prize}!**")
 
-    if users:
-        winner = random.choice(users)
-        await ctx.send(f"🏆 {winner.mention} thắng {prize}!")
-    else:
-        await ctx.send("Không ai tham gia 😭")
+# Task system
+@bot.command()
+@commands.has_any_role(*STAFF_ROLES)
+async def task(ctx, role: str, *, description: str):
+    role = role.capitalize()
+    if role not in [r.capitalize() for r in STAFF_ROLES]:
+        await ctx.send("**Role không hợp lệ!**")
+        return
 
-# ================= MUSIC =================
-
-FFMPEG_OPTIONS = {'options': '-vn'}
-YDL_OPTIONS = {'format': 'bestaudio/best', 'quiet': True}
-
-async def play_next(ctx):
-    guild_id = ctx.guild.id
-    vc = ctx.guild.voice_client
-
-    if guild_id in queues and queues[guild_id]:
-        url = queues[guild_id].pop(0)
-
-        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-            info = ydl.extract_info(f"ytsearch:{url}", download=False)['entries'][0]
-            link = info['url']
-
-        vc.play(
-            discord.FFmpegPCMAudio(link, executable="ffmpeg", **FFMPEG_OPTIONS),
-            after=lambda e: asyncio.run_coroutine_threadsafe(
-                play_next(ctx), bot.loop)
-        )
+    tasks = load_tasks()
+    task_id = len(tasks) + 1
+    task_data = {
+        "id": task_id,
+        "role": role,
+        "description": description,
+        "created_by": ctx.author.name,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "status": "Chưa hoàn thành"
+    }
+    tasks.append(task_data)
+    save_tasks(tasks)
+    await ctx.send(f"**✅ Task #{task_id} đã được tạo cho {role}**\n**Nội dung:** {description}")
 
 @bot.command()
-async def play(ctx, *, url):
+async def tasks(ctx):
+    tasks = load_tasks()
+    if not tasks:
+        await ctx.send("**Hiện không có task nào.**")
+        return
+    embed = discord.Embed(title="📋 Danh sách Task", color=0x3498db)
+    for t in tasks:
+        embed.add_field(name=f"Task #{t['id']} - {t['role']}", value=f"{t['description']}\n**Trạng thái:** {t['status']}\n**Tạo bởi:** {t['created_by']}", inline=False)
+    await ctx.send(embed=embed)
+
+# Music
+@bot.command()
+async def play(ctx, url: str):
     if not ctx.author.voice:
-        return await ctx.send("Vào voice trước 😭")
+        await ctx.send("**Bạn phải vào voice channel trước!**")
+        return
+    channel = ctx.author.voice.channel
+    try:
+        if ctx.voice_client is None:
+            await channel.connect()
+        elif ctx.voice_client.channel != channel:
+            await ctx.voice_client.move_to(channel)
 
-    vc = ctx.guild.voice_client
-    if not vc:
-        vc = await ctx.author.voice.channel.connect()
+        ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True, 'quiet': True}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            url2 = info['url']
 
-    queues.setdefault(ctx.guild.id, []).append(url)
-
-    if not vc.is_playing():
-        await play_next(ctx)
-        await ctx.send(f"🎵 {url}")
-    else:
-        await ctx.send("📥 Đã thêm")
+        FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
+        ctx.voice_client.play(discord.FFmpegPCMAudio(url2, **FFMPEG_OPTIONS))
+        await ctx.send(f"**🎵 Đang phát:** {info.get('title', url)}")
+    except Exception as e:
+        await ctx.send(f"**Lỗi phát nhạc:** {str(e)}")
 
 @bot.command()
 async def stop(ctx):
-    vc = ctx.guild.voice_client
-    if vc:
-        queues[ctx.guild.id] = []
-        await vc.disconnect()
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("**Đã dừng nhạc và rời voice channel.**")
+    else:
+        await ctx.send("**Bot không đang trong voice channel.**")
 
-# ================= RUN =================
-
-keep_alive()
-bot.run(TOKEN)
+# Run
+if __name__ == "__main__":
+    keep_alive()
+    token = os.getenv("TOKEN")
+    if token:
+        bot.run(token)
+    else:
+        print("Vui lòng thêm TOKEN vào Secrets!")
